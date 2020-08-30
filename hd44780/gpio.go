@@ -2,6 +2,7 @@ package hd44780
 
 import (
 	"errors"
+	"time"
 
 	"machine"
 )
@@ -12,8 +13,9 @@ type GPIO struct {
 	rw       machine.Pin
 	rs       machine.Pin
 
-	write func(data byte)
-	read  func() byte
+	write       func(data byte)
+	writeNibble func(data byte)
+	read        func() byte
 }
 
 func newGPIO(dataPins []machine.Pin, en, rs, rw machine.Pin, mode byte) Device {
@@ -35,8 +37,9 @@ func newGPIO(dataPins []machine.Pin, en, rs, rw machine.Pin, mode byte) Device {
 	}
 
 	if mode == DATA_LENGTH_4BIT {
-		gpio.write = gpio.write4BitMode
+		gpio.write = debugWrite(gpio.write4BitMode, false)
 		gpio.read = gpio.read4BitMode
+		gpio.writeNibble = debugWrite(gpio.write4BitNibble, true)
 	} else {
 		gpio.write = gpio.write8BitMode
 		gpio.read = gpio.read8BitMode
@@ -67,20 +70,71 @@ func (g *GPIO) Write(data []byte) (n int, err error) {
 	return n, nil
 }
 
-func (g *GPIO) write8BitMode(data byte) {
-	g.en.High()
-	g.setPins(data)
+func (g *GPIO) WriteNibble(data []byte) (n int, err error) {
+	g.rw.Low()
+	for _, d := range data {
+		g.writeNibble(d)
+		n++
+	}
+	g.pulseEnable()
+	return n, nil
+}
+
+func (g *GPIO) pulseEnable() {
 	g.en.Low()
+	time.Sleep(time.Microsecond)
+	g.en.High()
+	time.Sleep(time.Microsecond) // enable pulse must be >450ns
+	g.en.Low()
+	time.Sleep(100 * time.Microsecond) // commands need > 37us to settle
+}
+
+func (g *GPIO) write8BitMode(data byte) {
+	g.setPins(data)
+	g.pulseEnable()
+}
+
+func printBit(word, mask byte) {
+	bit := 0
+	if mask&word == mask {
+		bit = 1
+	}
+	print(bit)
+}
+
+func printNibble(word byte, nl bool) {
+	printBit(word, 0x8)
+	printBit(word, 0x4)
+	printBit(word, 0x2)
+	printBit(word, 0x1)
+	if nl {
+		println()
+	} else {
+		print(" ")
+	}
+}
+
+func debugWrite(write func(byte), onlyLow bool) func(byte) {
+	return func(data byte) {
+		highNibble := data >> 4
+		if !onlyLow {
+			printNibble(highNibble, false)
+		}
+
+		printNibble(data, true)
+
+		write(data)
+	}
+}
+
+func (g *GPIO) write4BitNibble(data byte) {
+	g.setPins(data)
+	g.pulseEnable()
 }
 
 func (g *GPIO) write4BitMode(data byte) {
-	g.en.High()
-	g.setPins(data >> 4)
-	g.en.Low()
-
-	g.en.High()
-	g.setPins(data)
-	g.en.Low()
+	g.write4BitNibble(data >> 4)
+	g.write4BitNibble(data)
 }
 
 // Read reads len(data) bytes from display RAM to data starting from RAM address counter position

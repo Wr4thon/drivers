@@ -14,6 +14,7 @@ import (
 type Buser interface {
 	io.ReadWriter
 	SetCommandMode(set bool)
+	WriteNibble(data []byte) (n int, err error)
 }
 
 type Device struct {
@@ -68,10 +69,10 @@ func (d *Device) Configure(cfg Config) error {
 	if d.width == 0 || d.height == 0 {
 		return errors.New("width and height must be set")
 	}
-	memoryMap := uint8(ONE_LINE)
-	if d.height > 1 {
-		memoryMap = TWO_LINE
-	}
+	// memoryMap := uint8(ONE_LINE)
+	// if d.height > 1 {
+	// 	memoryMap = TWO_LINE
+	// }
 	d.setRowOffsets()
 	d.ClearBuffer()
 
@@ -87,29 +88,34 @@ func (d *Device) Configure(cfg Config) error {
 		cfg.Font = FONT_5X8
 	}
 
-	//Wait 15ms after Vcc rises to 4.5V
-	time.Sleep(15 * time.Millisecond)
+	//Wait for more than 15ms after Vcc rises to 4.5V
+	time.Sleep(20 * time.Millisecond)
 
 	d.bus.SetCommandMode(true)
-	d.bus.Write([]byte{DATA_LENGTH_8BIT})
-	time.Sleep(5 * time.Millisecond)
-
-	for i := 0; i < 2; i++ {
-		d.bus.Write([]byte{DATA_LENGTH_8BIT})
-		time.Sleep(150 * time.Microsecond)
-
-	}
-
-	if d.datalength == DATA_LENGTH_4BIT {
-		d.bus.Write([]byte{DATA_LENGTH_4BIT >> 4})
-	}
+	d.bus.WriteNibble([]byte{0x03})
+	time.Sleep(4500 * time.Microsecond)
+	d.bus.WriteNibble([]byte{0x03})
+	time.Sleep(4500 * time.Microsecond)
+	d.bus.WriteNibble([]byte{0x03})
+	time.Sleep(150 * time.Microsecond)
+	d.bus.WriteNibble([]byte{0x02})
 
 	// Busy flag is now accessible
-	d.SendCommand(memoryMap | cfg.Font | d.datalength)
-	d.SendCommand(DISPLAY_OFF)
-	d.SendCommand(DISPLAY_CLEAR)
-	d.SendCommand(ENTRY_MODE | CURSOR_INCREASE | DISPLAY_NO_SHIFT)
+	println("functionSet")
+	d.SendCommand(0x28)
+	println("displayOff")
+	d.SendCommand(0x08)
+	println("displayClear")
+	d.SendCommand(0x01)
+	println("entryMode")
+	d.SendCommand(0x06)
+	println("displayOn")
 	d.SendCommand(DISPLAY_ON | uint8(cursor) | uint8(cursorBlink))
+	// d.SendCommand(memoryMap | cfg.Font | d.datalength)
+	// d.SendCommand(DISPLAY_OFF)
+	// d.SendCommand(DISPLAY_CLEAR)
+	// d.SendCommand(ENTRY_MODE | CURSOR_INCREASE | DISPLAY_NO_SHIFT)
+	// d.SendCommand(DISPLAY_ON | uint8(cursor) | uint8(cursorBlink))
 	return nil
 }
 
@@ -186,7 +192,22 @@ func (d *Device) SendCommand(command byte) {
 	d.bus.SetCommandMode(true)
 	d.bus.Write([]byte{command})
 
+	i := 0
+
 	for d.Busy() {
+		if i%10 == 0 {
+			println()
+			print("[ ")
+			for _, b := range d.busyStatus {
+				printNibble(b>>4, false)
+				printNibble(b, false)
+			}
+			print("] ")
+			print("busy ")
+		}
+		print(".")
+		i++
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -211,7 +232,7 @@ func (d *Device) CreateCharacter(cgramAddr uint8, data []byte) {
 func (d *Device) Busy() bool {
 	d.bus.SetCommandMode(true)
 	d.bus.Read(d.busyStatus)
-	return (d.busyStatus[0] & BUSY) > 0
+	return (d.busyStatus[0] & BUSY) == BUSY
 }
 
 // Size returns the current size of the display.
